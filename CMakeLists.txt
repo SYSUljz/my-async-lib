@@ -15,5 +15,6 @@ target_include_directories(ant_server INTERFACE
 )
 
 # --- 关键点：链接库 ---
-add_executable(test_server main.cpp)
+add_executable(test_server test/main.cpp)
 target_link_libraries(test_server PRIVATE ant_server ${URING_LIBRARIES})
+add_executable(test_client test/client.cpp)

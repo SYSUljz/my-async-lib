@@ -84,6 +84,12 @@ class Server {
       perror("Failed to initialize io_uring");
       exit(EXIT_FAILURE);
     }
+
+    if (io_uring_register_files_sparse(&ring, URING_SIZE) < 0) {
+      perror("Failed to register sparse files table");
+      exit(EXIT_FAILURE);
+    }
+
     submit_multishot_accept(ring);
     std::cout << "listen to port 8012" << std::endl;
     while (1) {
@@ -130,7 +136,7 @@ class Server {
   inline void submit_multishot_accept(struct io_uring& ring) {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
     io_uring_prep_multishot_accept_direct(sqe, server_socket, nullptr, nullptr, 0);
-
+    sqe->file_index = IORING_FILE_INDEX_ALLOC;
     io_uring_sqe_set_data(sqe, (void*)EVENT_ACCEPT);
     io_uring_submit(&ring);
   }
