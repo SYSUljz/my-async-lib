@@ -13,34 +13,49 @@
 #include <netinet/in.h>
 
 #include "awaiter.hpp"
+#include "http/parser.hpp"
 #include "type.hpp"
 static constexpr int BUFFER_SIZE = 16000;
 
 DetachedTask handle_http_client(io_uring& ring, int client_fd) {
   char buffer[BUFFER_SIZE];
-  int read_bytes = co_await ReadAwaiter {ring, client_fd, buffer, BUFFER_SIZE};
-  if (read_bytes <= 0) {
-    co_await CloseAwaiter {ring, client_fd};
-    co_return;
+  size_t read_idx = 0;
+  size_t write_idx = 0;
+  HttpParseState state = EXPECT_REQUIRE_LINE;
+  HttpRequest req;
+  while (true) {
+    std::string_view unparsed_data(buffer + read_idx, write_idx - read_idx);
+    ParseResult result = try_parse_http(unparsed_data, state, req);
+    if (result.status == PARSE_NEED_MORE_DATE) {
+      read_idx += result.consumed_bytes;
+      int read_bytes = co_await ReadAwaiter {ring, client_fd, buffer + write_idx, static_cast<int>(BUFFER_SIZE - write_idx)};
+      if (read_bytes <= 0) {
+        co_await CloseAwaiter {ring, client_fd};
+        co_return;
+      }
+      write_idx += read_bytes;
+      continue;
+    } else if (result.status == PARSE_SUCCESS) {
+      read_idx += result.consumed_bytes;
+      std::string_view body = "Hello, C++20 io_uring Web Server!";
+      auto format_result = std::format_to_n(buffer, BUFFER_SIZE,
+                                            "HTTP/1.1 200 OK\r\n"
+                                            "Server: MyAwesomeServer/1.0\r\n"
+                                            "Content-Length: {}\r\n"
+                                            "Content-Type: text/plain\r\n"
+                                            "\r\n"
+                                            "{}",
+                                            body.size(), body);
+      size_t response_len = format_result.size;
+      co_await WriteAwaiter {ring, client_fd, buffer, static_cast<int>(response_len)};
+      co_await CloseAwaiter {ring, client_fd};
+      co_return;
+    } else {
+      co_await CloseAwaiter {ring, client_fd};
+      co_return;
+    }
   }
-  std::string_view body = "Hello, C++20 io_uring Web Server!";
-
-  auto format_result = std::format_to_n(buffer, BUFFER_SIZE,
-                                        "HTTP/1.1 200 OK\r\n"
-                                        "Server: MyAwesomeServer/1.0\r\n"
-                                        "Content-Length: {}\r\n"
-                                        "Content-Type: text/plain\r\n"
-                                        "\r\n"
-                                        "{}",
-                                        body.size(), body);
-
-  size_t response_len = format_result.size;
-
-  co_await WriteAwaiter {ring, client_fd, buffer, response_len};
-  // process HTTP or task ...
-
-  co_await CloseAwaiter {ring, client_fd};
-};
+}
 
 class Server {
  public:
