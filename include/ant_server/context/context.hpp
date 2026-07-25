@@ -1,9 +1,9 @@
+#pragma once
 #include <liburing.h>
 
 #include <typeindex>
 
-#include "type.hpp"
-#include "utils/timer.hpp"
+#include "ant_server/type.hpp"
 struct BaseService;
 
 struct Context {
@@ -27,7 +27,7 @@ struct Context {
     std::type_index id(typeid(ServiceType));
     auto it = services_.find(id);
     if (it != services_.end()) {
-      return static_caset<ServiceType&>(*it->second);
+      return static_cast<ServiceType&>(*it->second);
     } else {
       auto new_service = std::make_unique<ServiceType>(*this);
       auto& ref = *new_service;
@@ -37,16 +37,22 @@ struct Context {
   }
   void Start() {
     while (1) {
+      int ret = io_uring_submit_and_wait(&ring_, 1);
+      if (ret < 0) {
+        if (ret == -EINTR) continue;
+        break;
+      }
       unsigned head = 0;
       unsigned count = 0;
       struct io_uring_cqe* cqe;
       io_uring_for_each_cqe(&ring_, head, cqe) {
         void* user_data = io_uring_cqe_get_data(cqe);
-        auto* handler = static_cast<IOHandler*>(user_data);
-        handler->on_complete(cqe->res, cqe->flags);
+        if (user_data) {
+          auto* handler = static_cast<IOHandler*>(user_data);
+          handler->on_complete(cqe->res, cqe->flags);
+        }
+        count++;
       }
-      count++;
-
       io_uring_cq_advance(&ring_, count);
     }
   }

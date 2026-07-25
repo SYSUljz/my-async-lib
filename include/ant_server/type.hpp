@@ -3,7 +3,7 @@
 enum EventType { EVENT_ACCEPT, EVENT_READ, EVENT_WRITE, EVENT_CLOSE, EVENT_TIMER };
 
 struct IOHandler {
-  virtual void on_complete(int res, uint32_t flages) = 0;
+  virtual void on_complete(int res, uint32_t flags) = 0;
   virtual ~IOHandler() = default;
 };
 
