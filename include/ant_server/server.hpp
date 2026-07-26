@@ -17,14 +17,14 @@
 
 #include <netinet/in.h>
 
-#include "ant_server/awaiter.hpp"
+#include "ant_server/awaiter/socket_awaiter.hpp"
 #include "ant_server/handler/acceptor.hpp"
 #include "ant_server/http/parser.hpp"
 #include "ant_server/type.hpp"
 
 static constexpr int BUFFER_SIZE = 16000;
 
-DetachedTask handle_http_client(Context& ctx, int client_fd);
+HttpTask handle_http_client(Context& ctx, int client_fd);
 
 class Server {
  public:
@@ -60,9 +60,8 @@ class Server {
       exit(EXIT_FAILURE);
     }
 
-    acceptor_ = std::make_unique<Acceptor>(ctx_, server_socket, [this](int client_fd) {
-      handle_http_client(ctx_, client_fd);
-    });
+    acceptor_ =
+        std::make_unique<Acceptor>(ctx_, server_socket, [this](int client_fd) { handle_http_client(ctx_, client_fd); });
     acceptor_->Start();
   }
   ~Server() {
@@ -86,7 +85,7 @@ class Server {
   std::unique_ptr<Acceptor> acceptor_;
 };
 
-inline DetachedTask handle_http_client(Context& ctx, int client_fd) {
+inline HttpTask handle_http_client(Context& ctx, int client_fd) {
   char buffer[BUFFER_SIZE];
   size_t read_idx = 0;
   size_t write_idx = 0;

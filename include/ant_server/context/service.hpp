@@ -27,26 +27,41 @@ struct IOuringSocketService : public BaseService {
     ctx_.Submit();
   }
 
-  void SubmitRead(int fd, char* buffer, std::size_t len, void* handler) {
+  void SubmitRead(int fd, char* buffer, std::size_t len, void* handler, bool is_fixed = true) {
     struct io_uring_sqe* sqe = ctx_.GetSqe();
     io_uring_prep_recv(sqe, fd, buffer, len, 0);
-    sqe->flags |= IOSQE_FIXED_FILE;
+    if (is_fixed) {
+      sqe->flags |= IOSQE_FIXED_FILE;
+    }
     io_uring_sqe_set_data(sqe, handler);
     ctx_.Submit();
   }
 
-  void SubmitWrite(int fd, char* buffer, std::size_t len, void* handler) {
+  void SubmitWrite(int fd, char* buffer, std::size_t len, void* handler, bool is_fixed = true) {
     struct io_uring_sqe* sqe = ctx_.GetSqe();
     io_uring_prep_send(sqe, fd, buffer, len, 0);
-    sqe->flags |= IOSQE_FIXED_FILE;
+    if (is_fixed) {
+      sqe->flags |= IOSQE_FIXED_FILE;
+    }
     io_uring_sqe_set_data(sqe, handler);
     ctx_.Submit();
   }
 
-  void SubmitClose(int fd, void* handler) {
+  void SubmitClose(int fd, void* handler, bool is_fixed = true) {
     struct io_uring_sqe* sqe = ctx_.GetSqe();
-    io_uring_prep_close_direct(sqe, fd);
+    if (is_fixed) {
+      io_uring_prep_close_direct(sqe, fd);
+    } else {
+      io_uring_prep_close(sqe, fd);
+    }
     io_uring_sqe_set_data(sqe, handler);
+    ctx_.Submit();
+  }
+  void SubmitCancel(void* handler) {
+    struct io_uring_sqe* sqe = ctx_.GetSqe();
+    io_uring_prep_cancel(sqe, handler, 0);
+    // no callback for cancel SQE itself
+    io_uring_sqe_set_data(sqe, nullptr);
     ctx_.Submit();
   }
 
@@ -55,8 +70,7 @@ struct IOuringSocketService : public BaseService {
 };
 
 struct IOuringTimeService : public BaseService {
-  explicit IOuringTimeService(Context& ctx, std::size_t period_ms = 1000)
-      : ctx_(ctx), period_ms_(period_ms) {}
+  explicit IOuringTimeService(Context& ctx, std::size_t period_ms = 1000) : ctx_(ctx), period_ms_(period_ms) {}
 
   void StartTick(IOHandler* handler) {
     io_uring_sqe* sqe = ctx_.GetSqe();
