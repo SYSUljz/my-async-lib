@@ -18,6 +18,7 @@
 #include <netinet/in.h>
 
 #include "ant_server/awaiter/socket_awaiter.hpp"
+#include "ant_server/awaiter/timeput_awaiter.hpp"
 #include "ant_server/handler/acceptor.hpp"
 #include "ant_server/http/parser.hpp"
 #include "ant_server/type.hpp"
@@ -60,8 +61,13 @@ class Server {
       exit(EXIT_FAILURE);
     }
 
-    acceptor_ =
-        std::make_unique<Acceptor>(ctx_, server_socket, [this](int client_fd) { handle_http_client(ctx_, client_fd); });
+    acceptor_ = std::make_unique<Acceptor>(ctx_, server_socket, [this](int client_fd) {
+      [](Context& ctx, int fd) -> DetachedTask {
+        co_await with_timeout(ctx, std::chrono::seconds(5), [&]() {
+          return handle_http_client(ctx, fd);
+        });
+      }(ctx_, client_fd);
+    });
     acceptor_->Start();
   }
   ~Server() {
@@ -117,6 +123,11 @@ inline HttpTask handle_http_client(Context& ctx, int client_fd) {
       int read_bytes =
           co_await ReadAwaiter {ctx, client_fd, buffer + write_idx, static_cast<int>(BUFFER_SIZE - write_idx)};
       if (read_bytes <= 0) {
+        if (read_bytes == -ECANCELED) {
+          std::cout << "[Server] Client fd " << client_fd << " timed out (5s), safely closing connection." << std::endl;
+        } else {
+          std::cout << "[Server] Client fd " << client_fd << " disconnected." << std::endl;
+        }
         co_await CloseAwaiter {ctx, client_fd};
         co_return;
       }

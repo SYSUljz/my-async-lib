@@ -12,6 +12,18 @@ struct IOHandler {
   virtual ~IOHandler() = default;
 };
 
+// Task used in AntTimer service
+struct Task {
+  std::size_t id;
+  std::chrono::steady_clock::time_point time;
+  bool canceled = false;
+  std::function<void()> callback;
+  bool operator>(const Task& other) { return time > other.time; }
+};
+
+struct TaskComparator {
+  bool operator()(const std::shared_ptr<Task>& lhs, const std::shared_ptr<Task>& rhs) const { return *lhs > *rhs; }
+};
 enum class CancelState { pending, canceled };
 struct DetachedTask {
   struct promise_type {
@@ -25,11 +37,25 @@ struct DetachedTask {
 struct HttpTask {
   struct promise_type {
     std::stop_token token;
+    std::coroutine_handle<> continuation {nullptr};
+    void set_continuation(std::coroutine_handle<> h) { continuation = h; }
 
-    HttpTask get_return_object() { return HttpTask {std::coroutine_handle<promise_type>::from_promise(*this)}; }
+    struct FinalAwaiter {
+      bool await_ready() noexcept { return false; }
+      template <typename Promise>
+      std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        if (auto parent = h.promise().continuation) {
+          return parent;
+        }
+        return std::noop_coroutine();
+      }
+      void await_resume() noexcept {};
+    };
 
     std::suspend_never initial_suspend() { return {}; }
-    std::suspend_never final_suspend() noexcept { return {}; }
+    FinalAwaiter final_suspend() noexcept { return {}; }
+    HttpTask get_return_object() { return HttpTask {std::coroutine_handle<promise_type>::from_promise(*this)}; }
+
     void return_void() {}
     void unhandled_exception() { std::terminate(); }
 

@@ -57,6 +57,7 @@ struct IOuringSocketService : public BaseService {
     io_uring_sqe_set_data(sqe, handler);
     ctx_.Submit();
   }
+
   void SubmitCancel(void* handler) {
     struct io_uring_sqe* sqe = ctx_.GetSqe();
     io_uring_prep_cancel(sqe, handler, 0);
