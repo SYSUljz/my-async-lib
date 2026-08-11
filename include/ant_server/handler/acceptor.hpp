@@ -17,14 +17,14 @@ struct Acceptor : public IOHandler {
 
   void Start() { service_.submit_multishot_accept(server_socket_, static_cast<IOHandler*>(this)); }
 
-  void on_complete(int res, uint32_t flags) override {
-    if (res >= 0) {
-      on_accept_cb_(res);
+  void on_complete() override {
+    if (res_ >= 0) {
+      on_accept_cb_(res_);
     } else {
       perror("Accept error");
     }
 
-    if (!(flags & IORING_CQE_F_MORE)) {
+    if (!(flags_ & IORING_CQE_F_MORE)) {
       service_.submit_multishot_accept(server_socket_, static_cast<IOHandler*>(this));
     }
   }

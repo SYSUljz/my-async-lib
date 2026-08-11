@@ -1,13 +1,18 @@
 #pragma once
 #include <liburing.h>
 
+#include <memory>
+#include <stdexcept>
 #include <typeindex>
+#include <unordered_map>
 
 #include "ant_server/type.hpp"
+
 struct BaseService;
+struct Scheduler;
 
 struct Context {
-  Context(std::size_t uring_size) {
+  explicit Context(std::size_t uring_size = 256, Scheduler* scheduler = nullptr) : scheduler_(scheduler) {
     if (io_uring_queue_init(uring_size, &ring_, 0) < 0) {
       throw std::runtime_error("Failed to initialize io_uring");
     }
@@ -35,6 +40,7 @@ struct Context {
       return ref;
     }
   }
+
   inline int ProcessEvents(int wait_nr = 1) {
     int ret = io_uring_submit_and_wait(&ring_, wait_nr);
     if (ret < 0) {
@@ -47,7 +53,8 @@ struct Context {
       void* user_data = io_uring_cqe_get_data(cqe);
       if (user_data) {
         auto* handler = static_cast<IOHandler*>(user_data);
-        handler->on_complete(cqe->res, cqe->flags);
+        handler->prepare_complete(cqe->res, cqe->flags);
+        handler->on_complete();
       }
       count++;
     }
@@ -70,7 +77,9 @@ struct Context {
 
  private:
   struct io_uring ring_;
-  uint32_t timeout_ms_;
+  uint32_t timeout_ms_ {0};
+  std::size_t thread_id_ {0};
   bool running_ {false};
   std::unordered_map<std::type_index, std::unique_ptr<BaseService>> services_;
+  Scheduler* scheduler_ {nullptr};
 };

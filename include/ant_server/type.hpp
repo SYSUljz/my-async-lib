@@ -3,15 +3,45 @@
 
 #include <coroutine>
 #include <exception>
+#include <new>
 #include <stop_token>
+
+// GCC warns that hardware_destructive_interference_size may vary with -mtune;
+// for an internal-use type this is acceptable — silence the warning locally.
+#if defined(__cpp_lib_hardware_interference_size)
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winterference-size"
+#endif
+static constexpr std::size_t kCacheLineSize = std::hardware_destructive_interference_size;
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+#else
+static constexpr std::size_t kCacheLineSize = 64;
+#endif
 
 enum EventType { EVENT_ACCEPT, EVENT_READ, EVENT_WRITE, EVENT_CLOSE, EVENT_TIMER };
 
 struct IOHandler {
-  virtual void on_complete(int res, uint32_t flags) = 0;
+  virtual void on_complete() = 0;
   virtual ~IOHandler() = default;
+  void prepare_complete(int res, uint32_t flags) {
+    res_ = res;
+    flags_ = flags;
+  }
+
+  int res_;
+  uint32_t flags_;
 };
 
+struct Context;
+struct Scheduler;
+inline thread_local Scheduler* g_scheduler = nullptr;
+inline thread_local std::size_t g_thread_id {0};
+
+inline thread_local Context* g_local_context = nullptr;
+inline Context& GetCurrentContext() { return *g_local_context; }
 // Task used in AntTimer service
 struct Task {
   std::size_t id;
@@ -64,6 +94,93 @@ struct HttpTask {
     std::stop_token get_stop_token() const { return token; }
   };
   std::coroutine_handle<promise_type> handle {nullptr};
+};
+struct alignas(kCacheLineSize) TaskNode {
+  TaskNode* next {nullptr};
+  void (*execute)(TaskNode* self) noexcept;
+
+  void run() {
+    if (execute) {
+      execute(this);
+    }
+  }
+};
+struct CoroTask : public TaskNode {
+  std::coroutine_handle<> handle {nullptr};
+
+  CoroTask() noexcept {
+    execute = [](TaskNode* self) noexcept {
+      auto* coro_node = static_cast<CoroTask*>(self);
+      if (coro_node->handle) {
+        coro_node->handle.resume();
+      }
+    };
+  }
+
+  explicit CoroTask(std::coroutine_handle<> h) noexcept : CoroTask() { handle = h; }
+
+  void init(std::coroutine_handle<> h) noexcept { handle = h; }
+};
+template <typename F>
+struct LambdaTask : public TaskNode {
+  F func;
+
+  explicit LambdaTask(F&& f) : func(std::forward<F>(f)) {
+    execute = [](TaskNode* self) noexcept {
+      auto* lambda_node = static_cast<LambdaTask<F>*>(self);
+      lambda_node->func();
+    };
+  }
+};
+
+template <typename F>
+auto make_lambda_task(F&& f) {
+  return LambdaTask<std::decay_t<F>> {std::forward<F>(f)};
+}
+struct TypeErasedTask : public TaskNode {
+  static constexpr size_t SBO_SIZE = 48;
+
+  alignas(8) char sbo_buffer[SBO_SIZE];
+  void (*destroy_fn)(TaskNode* self) noexcept {nullptr};
+
+  template <typename F>
+  explicit TypeErasedTask(F&& f) {
+    using DecayedF = std::decay_t<F>;
+    static_assert(sizeof(DecayedF) <= SBO_SIZE, "Closure too large for SBO!");
+
+    new (sbo_buffer) DecayedF(std::forward<F>(f));
+
+    execute = [](TaskNode* self) noexcept {
+      auto* node = static_cast<TypeErasedTask*>(self);
+      auto* func = reinterpret_cast<DecayedF*>(node->sbo_buffer);
+      (*func)();
+    };
+
+    destroy_fn = [](TaskNode* self) noexcept {
+      auto* node = static_cast<TypeErasedTask*>(self);
+      auto* func = reinterpret_cast<DecayedF*>(node->sbo_buffer);
+      func->~DecayedF();
+    };
+  }
+
+  ~TypeErasedTask() {
+    if (destroy_fn) destroy_fn(this);
+  }
+};
+
+// for cpp26 p2300 sender/receiver
+template <typename OpState>
+struct SenderTask : public TaskNode {
+  OpState* op_state {nullptr};
+
+  explicit SenderTask(OpState* op) : op_state(op) {
+    execute = [](TaskNode* self) noexcept {
+      auto* node = static_cast<SenderTask<OpState>*>(self);
+      if (node->op_state) {
+        // std::execution::set_value(std::move(*node->op_state));
+      }
+    };
+  }
 };
 
 #endif

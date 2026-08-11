@@ -1,12 +1,13 @@
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
 #include <unistd.h>
 
 #include <chrono>
 #include <cstring>
 #include <iostream>
 #include <thread>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include "ant_server/server.hpp"
 
@@ -55,7 +56,8 @@ int main() {
   int res = read(sock, buffer, sizeof(buffer) - 1);
 
   if (res == 0) {
-    std::cout << "[Client] SUCCESS: Server closed connection as expected after 5s timeout! (read returned 0)" << std::endl;
+    std::cout << "[Client] SUCCESS: Server closed connection as expected after 5s timeout! (read returned 0)"
+              << std::endl;
   } else if (res < 0) {
     std::cout << "[Client] SUCCESS: Connection reset/closed by server! (read returned " << res << ")" << std::endl;
   } else {

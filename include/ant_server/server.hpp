@@ -63,9 +63,7 @@ class Server {
 
     acceptor_ = std::make_unique<Acceptor>(ctx_, server_socket, [this](int client_fd) {
       [](Context& ctx, int fd) -> DetachedTask {
-        co_await with_timeout(ctx, std::chrono::seconds(5), [&]() {
-          return handle_http_client(ctx, fd);
-        });
+        co_await with_timeout(ctx, std::chrono::seconds(5), [&]() { return handle_http_client(ctx, fd); });
       }(ctx_, client_fd);
     });
     acceptor_->Start();

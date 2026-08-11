@@ -1,10 +1,11 @@
-#include <gtest/gtest.h>
-#include <sys/socket.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <coroutine>
 #include <stop_token>
+
+#include <gtest/gtest.h>
+#include <sys/socket.h>
 
 #include "ant_server/awaiter/socket_awaiter.hpp"
 #include "ant_server/context/context.hpp"
@@ -16,7 +17,7 @@ struct TestCancelTask {
     std::stop_token token;
 
     TestCancelTask get_return_object() {
-      return TestCancelTask{std::coroutine_handle<promise_type>::from_promise(*this)};
+      return TestCancelTask {std::coroutine_handle<promise_type>::from_promise(*this)};
     }
 
     std::suspend_always initial_suspend() { return {}; }
@@ -28,7 +29,7 @@ struct TestCancelTask {
     std::stop_token get_stop_token() const { return token; }
   };
 
-  std::coroutine_handle<promise_type> handle{nullptr};
+  std::coroutine_handle<promise_type> handle {nullptr};
 };
 
 static TestCancelTask async_read_coro(Context& ctx, int fd, int& out_res, bool& finished) {

@@ -9,12 +9,13 @@
 
 #include "ant_server/context/context.hpp"
 #include "ant_server/context/service.hpp"
+#include "ant_server/scheduler/scheduler.hpp"
 #include "ant_server/type.hpp"
 
-struct BaseAwaiter : public IOHandler {
-  explicit BaseAwaiter(Context& ctx) : socket_service_(ctx.UseService<IOuringSocketService>()) {}
+struct BaseAwaiter : public IOHandler, public CoroTask {
+  explicit BaseAwaiter(Context& ctx = GetCurrentContext()) : socket_service_(ctx.UseService<IOuringSocketService>()) {}
   std::coroutine_handle<> handle;
-  int res {0};
+
   IOuringSocketService& socket_service_;
   std::stop_token token_;
   std::atomic<CancelState> state_;
@@ -30,16 +31,22 @@ struct BaseAwaiter : public IOHandler {
     });
   }
   virtual void on_cancel() {};
-  void on_complete(int res, uint32_t flags) override {
-    this->res = res;
+  void on_complete() override {
     if (handle) {
-      handle.resume();
+      this->init(handle);
+      if (g_scheduler) {
+        g_scheduler->schedule(this, g_thread_id);
+      } else {
+        handle.resume();
+      }
     }
   }
 };
 
 struct ReadAwaiter : public BaseAwaiter {
   ReadAwaiter(Context& ctx, int client_fd, char* buffer, int buffer_size, bool is_fixed = true)
+      : BaseAwaiter(ctx), fd_(client_fd), buffer_(buffer), len_(buffer_size), is_fixed_(is_fixed) {}
+  ReadAwaiter(int client_fd, char* buffer, int buffer_size, bool is_fixed = true, Context& ctx = GetCurrentContext())
       : BaseAwaiter(ctx), fd_(client_fd), buffer_(buffer), len_(buffer_size), is_fixed_(is_fixed) {}
   bool await_ready() { return false; }
 
@@ -52,7 +59,7 @@ struct ReadAwaiter : public BaseAwaiter {
     socket_service_.SubmitRead(fd_, buffer_, len_, static_cast<IOHandler*>(this), is_fixed_);
     bind_stop_callback();
   }
-  int await_resume() { return this->res; }
+  int await_resume() { return this->res_; }
   void on_cancel() override { socket_service_.SubmitCancel(this); }
 
  private:
@@ -65,6 +72,8 @@ struct ReadAwaiter : public BaseAwaiter {
 struct WriteAwaiter : public BaseAwaiter {
   WriteAwaiter(Context& ctx, int client_fd, char* buffer, int buffer_size, bool is_fixed = true)
       : BaseAwaiter(ctx), fd_(client_fd), buffer_(buffer), len_(buffer_size), is_fixed_(is_fixed) {}
+  WriteAwaiter(int client_fd, char* buffer, int buffer_size, bool is_fixed = true, Context& ctx = GetCurrentContext())
+      : BaseAwaiter(ctx), fd_(client_fd), buffer_(buffer), len_(buffer_size), is_fixed_(is_fixed) {}
   bool await_ready() { return false; }
 
   template <typename PromiseType>
@@ -76,7 +85,7 @@ struct WriteAwaiter : public BaseAwaiter {
     socket_service_.SubmitWrite(fd_, buffer_, len_, static_cast<IOHandler*>(this), is_fixed_);
     bind_stop_callback();
   }
-  int await_resume() { return this->res; }
+  int await_resume() { return this->res_; }
   void on_cancel() override { socket_service_.SubmitCancel(this); }
 
  private:
@@ -89,12 +98,14 @@ struct WriteAwaiter : public BaseAwaiter {
 struct CloseAwaiter : public BaseAwaiter {
   CloseAwaiter(Context& ctx, int client_fd, bool is_fixed = true)
       : BaseAwaiter(ctx), fd_(client_fd), is_fixed_(is_fixed) {}
+  CloseAwaiter(int client_fd, bool is_fixed = true, Context& ctx = GetCurrentContext())
+      : BaseAwaiter(ctx), fd_(client_fd), is_fixed_(is_fixed) {}
   bool await_ready() { return false; }
   void await_suspend(std::coroutine_handle<> handle) {
     this->handle = handle;
     socket_service_.SubmitClose(fd_, static_cast<IOHandler*>(this), is_fixed_);
   }
-  int await_resume() { return this->res; }
+  int await_resume() { return this->res_; }
 
  private:
   int fd_;

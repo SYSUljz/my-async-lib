@@ -12,7 +12,8 @@
 #include "ant_server/context/service.hpp"
 #include "ant_server/type.hpp"
 
-// Todo: impl a iterable version of priority_queue so we can store Task in queue rather than shared_ptr<Task> that's CPU cache affinity
+// Todo: impl a iterable version of priority_queue so we can store Task in queue rather than shared_ptr<Task> that's CPU
+// cache affinity
 class AntTimer : public BaseService, public IOHandler {
  public:
   explicit AntTimer(Context& ctx, std::size_t period_ms = 100)
@@ -32,7 +33,7 @@ class AntTimer : public BaseService, public IOHandler {
     return task->id;
   }
 
-  void on_complete(int res, uint32_t flags) override {
+  void on_complete() override {
     tick();
     start();
   }
@@ -67,7 +68,7 @@ class AntTimer : public BaseService, public IOHandler {
   void start() { service_.StartTick(static_cast<IOHandler*>(this)); }
 
   Context& ctx_;
-  std::size_t next_id_{0};
+  std::size_t next_id_ {0};
   std::size_t period_ms_;
   std::priority_queue<std::shared_ptr<Task>, std::vector<std::shared_ptr<Task>>, TaskComparator> timer_queue_;
   std::unordered_map<std::size_t, std::shared_ptr<Task>> task_map_;
