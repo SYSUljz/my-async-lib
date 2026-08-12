@@ -75,6 +75,25 @@ class SPMCQueue {
     return nullptr;
   }
 
+  // 4. Owner Thread TakeHalf operation (Extract half of local tasks to offload to global queue)
+  std::size_t TakeHalf(std::array<T, kMaxSize>& out_batch) {
+    int64_t b = bottom_.load(std::memory_order_relaxed);
+    int64_t t = top_.load(std::memory_order_acquire);
+    int64_t size = b - t;
+    if (size <= 0) return 0;
+
+    int64_t num_to_take = size / 2;
+    if (num_to_take == 0) num_to_take = 1;
+
+    if (top_.compare_exchange_strong(t, t + num_to_take, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+      for (int64_t i = 0; i < num_to_take; ++i) {
+        out_batch[i] = buffer_[(t + i) & kMask];
+      }
+      return static_cast<std::size_t>(num_to_take);
+    }
+    return 0;
+  }
+
  private:
   static constexpr int64_t kMask = static_cast<int64_t>(kMaxSize - 1);
   std::array<T, kMaxSize> buffer_ {};

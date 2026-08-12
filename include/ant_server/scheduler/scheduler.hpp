@@ -1,14 +1,13 @@
 #pragma once
 
+#include <array>
 #include <atomic>
-#include <condition_variable>
-#include <deque>
 #include <memory>
-#include <mutex>
 #include <thread>
 #include <vector>
 
 #include "ant_server/context/context.hpp"
+#include "ant_server/scheduler/mpmc_queue.hpp"
 #include "ant_server/scheduler/spmc_queue.hpp"
 #include "ant_server/type.hpp"
 
@@ -42,7 +41,19 @@ class Scheduler {
       w.lifo_slot = task;
     } else {
       if (!w.queue.Push(task)) {
-        push_global(task);
+        // Local queue is full (256): batch offload half of local queue to global queue
+        std::array<TaskNode*, 256> batch {};
+        std::size_t count = w.queue.TakeHalf(batch);
+        if (count > 0) {
+          for (std::size_t i = 0; i < count - 1; ++i) {
+            batch[i]->next = batch[i + 1];
+          }
+          batch[count - 1]->next = task;
+          task->next = nullptr;
+          global_queue_.PushBatch(batch[0], task);
+        } else {
+          global_queue_.Push(task);
+        }
       }
     }
   }
@@ -115,29 +126,12 @@ class Scheduler {
     }
   }
 
-  void Stop() {
-    running_.store(false);
-    cv_.notify_all();
-  }
+  void Stop() { running_.store(false); }
 
  private:
-  void push_global(TaskNode* task) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      global_queue_.push_back(task);
-    }
-    cv_.notify_one();
-  }
+  void push_global(TaskNode* task) { global_queue_.Push(task); }
 
-  TaskNode* pop_global() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (global_queue_.empty()) {
-      return nullptr;
-    }
-    auto* task = global_queue_.front();
-    global_queue_.pop_front();
-    return task;
-  }
+  TaskNode* pop_global() { return global_queue_.Pop(); }
 
   TaskNode* steal_task(int thief_id) {
     for (std::size_t i = 0; i < nthreads_; ++i) {
@@ -151,8 +145,6 @@ class Scheduler {
 
   std::vector<std::unique_ptr<WorkerState>> workers_;
   alignas(kCacheLineSize) std::atomic<bool> running_ {false};
-  std::deque<TaskNode*> global_queue_;
-  mutable std::mutex mutex_;
-  std::condition_variable cv_;
+  IntrusiveSpinLockQueue global_queue_;
   std::size_t nthreads_;
 };
