@@ -13,7 +13,7 @@
 // Stealer Threads: FIFO Steal at the Top end
 // Uses std::array<T, kMaxSize> inline storage for zero pointer allocation
 // ============================================================
-template <typename T = TaskNode*, std::size_t kMaxSize = 256>
+template <typename T = TaskNode*, std::size_t kMaxSize = ant_server::constants::kDefaultSpmcCapacity>
 class SPMCQueue {
   static_assert((kMaxSize & (kMaxSize - 1)) == 0, "kMaxSize must be a power of 2");
 

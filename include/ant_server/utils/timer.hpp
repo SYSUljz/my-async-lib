@@ -6,7 +6,8 @@
 #include <functional>
 #include <memory>
 #include <queue>
-#include <unordered_map>
+
+#include <absl/container/flat_hash_map.h>
 
 #include "ant_server/context/context.hpp"
 #include "ant_server/context/service.hpp"
@@ -71,7 +72,7 @@ class AntTimer : public BaseService, public IOHandler {
   std::size_t next_id_ {0};
   std::size_t period_ms_;
   std::priority_queue<std::shared_ptr<Task>, std::vector<std::shared_ptr<Task>>, TaskComparator> timer_queue_;
-  std::unordered_map<std::size_t, std::shared_ptr<Task>> task_map_;
+  absl::flat_hash_map<std::size_t, std::shared_ptr<Task>> task_map_;
   IOuringTimeService& service_;
 };
 

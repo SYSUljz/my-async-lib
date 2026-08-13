@@ -1,7 +1,8 @@
 #pragma once
 #include <string>
 #include <string_view>
-#include <unordered_map>
+
+#include <absl/container/flat_hash_map.h>
 enum HttpParseState { EXPECT_REQUIRE_LINE, EXPECT_HEADERS, EXPECT_BODY, PARSE_DONE };
 
 enum ParseStatus { PARSE_SUCCESS, PARSE_NEED_MORE_DATE, PARSE_ERROR };
@@ -15,7 +16,7 @@ struct HttpRequest {
   std::string_view method;
   std::string_view uri;
   std::string_view version;
-  std::unordered_map<std::string_view, std::string_view> headers;
+  absl::flat_hash_map<std::string_view, std::string_view> headers;
   size_t content_length = 0;
   std::string_view body;
 };

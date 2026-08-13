@@ -4,7 +4,8 @@
 #include <memory>
 #include <stdexcept>
 #include <typeindex>
-#include <unordered_map>
+
+#include <absl/container/flat_hash_map.h>
 
 #include "ant_server/type.hpp"
 
@@ -80,6 +81,6 @@ struct Context {
   uint32_t timeout_ms_ {0};
   std::size_t thread_id_ {0};
   bool running_ {false};
-  std::unordered_map<std::type_index, std::unique_ptr<BaseService>> services_;
+  absl::flat_hash_map<std::type_index, std::unique_ptr<BaseService>> services_;
   Scheduler* scheduler_ {nullptr};
 };

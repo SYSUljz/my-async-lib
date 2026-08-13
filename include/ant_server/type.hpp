@@ -6,20 +6,7 @@
 #include <new>
 #include <stop_token>
 
-// GCC warns that hardware_destructive_interference_size may vary with -mtune;
-// for an internal-use type this is acceptable — silence the warning locally.
-#if defined(__cpp_lib_hardware_interference_size)
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winterference-size"
-#endif
-static constexpr std::size_t kCacheLineSize = std::hardware_destructive_interference_size;
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-#else
-static constexpr std::size_t kCacheLineSize = 64;
-#endif
+#include "ant_server/constants.hpp"
 
 enum EventType { EVENT_ACCEPT, EVENT_READ, EVENT_WRITE, EVENT_CLOSE, EVENT_TIMER };
 
@@ -138,7 +125,7 @@ auto make_lambda_task(F&& f) {
   return LambdaTask<std::decay_t<F>> {std::forward<F>(f)};
 }
 struct TypeErasedTask : public TaskNode {
-  static constexpr size_t SBO_SIZE = 48;
+  static constexpr size_t SBO_SIZE = ant_server::constants::kTaskSboSize;
 
   alignas(8) char sbo_buffer[SBO_SIZE];
   void (*destroy_fn)(TaskNode* self) noexcept {nullptr};
