@@ -8,11 +8,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(URING REQUIRED liburing)
 
+add_subdirectory(3rd_party/butil)
+add_subdirectory(3rd_party/llhttp)
+
 add_library(ant_server INTERFACE)
 target_include_directories(ant_server INTERFACE
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/3rd_party
 )
-target_link_libraries(ant_server INTERFACE absl::flat_hash_map)
+target_link_libraries(ant_server INTERFACE butil llhttp absl::flat_hash_map)
+
 
 
 # --- FetchContent Dependencies ---
@@ -48,7 +53,7 @@ target_link_libraries(test_timeout PRIVATE ant_server ${URING_LIBRARIES} absl::s
 # --- GoogleTest Configuration ---
 enable_testing()
 
-add_executable(unit_tests test/test_read_awaiter_cancel.cpp)
+add_executable(unit_tests test/test_read_awaiter_cancel.cpp test/test_iobuf.cpp)
 target_link_libraries(unit_tests PRIVATE ant_server ${URING_LIBRARIES} absl::synchronization absl::base gtest_main)
 
 include(GoogleTest)

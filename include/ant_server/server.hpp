@@ -90,36 +90,15 @@ class Server {
 };
 
 inline HttpTask handle_http_client(Context& ctx, int client_fd) {
-  char buffer[BUFFER_SIZE];
-  size_t read_idx = 0;
-  size_t write_idx = 0;
-  HttpParseState state = EXPECT_REQUIRE_LINE;
+  butil::IOBuf read_buf;
+  HttpParser parser;
   HttpRequest req;
+
   while (true) {
-    std::string_view unparsed_data(buffer + read_idx, write_idx - read_idx);
-    ParseResult result = try_parse_http(unparsed_data, state, req);
-    if (result.status == PARSE_NEED_MORE_DATE) {
-      read_idx += result.consumed_bytes;
+    ParseResult result = parser.parse(read_buf, req);
 
-      if (read_idx > 0) {
-        if (read_idx < write_idx) {
-          std::memmove(buffer, buffer + read_idx, write_idx - read_idx);
-          write_idx = write_idx - read_idx;
-          read_idx = 0;
-        } else {
-          read_idx = 0;
-          write_idx = 0;
-        }
-      }
-
-      if (write_idx >= BUFFER_SIZE) {
-        co_await CloseAwaiter {ctx, client_fd};
-        co_return;
-      }
-
-      // Read from socket
-      int read_bytes =
-          co_await ReadAwaiter {ctx, client_fd, buffer + write_idx, static_cast<int>(BUFFER_SIZE - write_idx)};
+    if (result.status == PARSE_NEED_MORE_DATA) {
+      int read_bytes = co_await ReadAwaiter {ctx, client_fd, read_buf};
       if (read_bytes <= 0) {
         if (read_bytes == -ECANCELED) {
           std::cout << "[Server] Client fd " << client_fd << " timed out (5s), safely closing connection." << std::endl;
@@ -129,52 +108,35 @@ inline HttpTask handle_http_client(Context& ctx, int client_fd) {
         co_await CloseAwaiter {ctx, client_fd};
         co_return;
       }
-
-      write_idx += read_bytes;
       continue;
     } else if (result.status == PARSE_SUCCESS) {
-      read_idx += result.consumed_bytes;
+      read_buf.pop_front(result.consumed_bytes);
 
-      bool keep_alive = false;
-      auto it = req.headers.find("Connection");
-      if (it != req.headers.end()) {
-        if (it->second == "keep-alive" || it->second == "Keep-Alive") {
-          keep_alive = true;
-        }
-      } else if (req.version == "HTTP/1.1") {
-        keep_alive = true;
-      }
+      bool keep_alive = req.keep_alive;
+      std::string body = "Hello, C++20 io_uring Web Server with IOBuf & llhttp!";
 
-      std::string_view body = "Hello, C++20 io_uring Web Server!";
-      auto format_result = std::format_to_n(buffer, BUFFER_SIZE,
-                                            "HTTP/1.1 200 OK\r\n"
-                                            "Server: MyAwesomeServer/1.0\r\n"
-                                            "Content-Length: {}\r\n"
-                                            "Content-Type: text/plain\r\n"
-                                            "Connection: {}\r\n"
-                                            "\r\n"
-                                            "{}",
-                                            body.size(), keep_alive ? "keep-alive" : "close", body);
-      size_t response_len = format_result.size;
-      co_await WriteAwaiter {ctx, client_fd, buffer, static_cast<int>(response_len)};
+      butil::IOBuf response_buf;
+      std::string header_str = std::format(
+          "HTTP/1.1 200 OK\r\n"
+          "Server: MyAwesomeServer/1.0\r\n"
+          "Content-Length: {}\r\n"
+          "Content-Type: text/plain\r\n"
+          "Connection: {}\r\n"
+          "\r\n"
+          "{}",
+          body.size(), keep_alive ? "keep-alive" : "close", body);
+      response_buf.append(header_str);
+
+      co_await IOBufWriteAwaiter {ctx, client_fd, response_buf};
 
       if (keep_alive) {
-        // Reset state
-        state = EXPECT_REQUIRE_LINE;
+        parser.reset();
         req = HttpRequest {};
-        if (read_idx < write_idx) {
-          std::memmove(buffer, buffer + read_idx, write_idx - read_idx);
-          write_idx = write_idx - read_idx;
-          read_idx = 0;
-        } else {
-          read_idx = 0;
-          write_idx = 0;
-        }
         continue;
+      } else {
+        co_await CloseAwaiter {ctx, client_fd};
+        co_return;
       }
-
-      co_await CloseAwaiter {ctx, client_fd};
-      co_return;
     } else {
       co_await CloseAwaiter {ctx, client_fd};
       co_return;

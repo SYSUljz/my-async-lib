@@ -16,11 +16,8 @@ SRC_FILES := $(shell find include test -type f \( -name "*.hpp" -o -name "*.cpp"
 
 all: build
 
-build: $(BIN_TARGET)
-
-$(BIN_TARGET): test/main.cpp
-	@mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+build:
+	@mkdir -p $(BUILD_DIR) && cd $(BUILD_DIR) && cmake .. && $(MAKE) -j$(nproc)
 	@echo "Build successful: $(BIN_TARGET)"
 
 run: build

@@ -47,6 +47,16 @@ struct IOuringSocketService : public BaseService {
     ctx_.Submit();
   }
 
+  void SubmitWritev(int fd, const struct iovec* iovs, int nr_iovs, void* handler, bool is_fixed = true) {
+    struct io_uring_sqe* sqe = ctx_.GetSqe();
+    io_uring_prep_writev(sqe, fd, iovs, nr_iovs, 0);
+    if (is_fixed) {
+      sqe->flags |= IOSQE_FIXED_FILE;
+    }
+    io_uring_sqe_set_data(sqe, handler);
+    ctx_.Submit();
+  }
+
   void SubmitClose(int fd, void* handler, bool is_fixed = true) {
     struct io_uring_sqe* sqe = ctx_.GetSqe();
     if (is_fixed) {

@@ -1,95 +1,140 @@
 #pragma once
-#include <string>
+
 #include <string_view>
 
 #include <absl/container/flat_hash_map.h>
-enum HttpParseState { EXPECT_REQUIRE_LINE, EXPECT_HEADERS, EXPECT_BODY, PARSE_DONE };
 
-enum ParseStatus { PARSE_SUCCESS, PARSE_NEED_MORE_DATE, PARSE_ERROR };
+#include "butil/iobuf.h"
+#include "llhttp.h"
+
+enum ParseStatus { PARSE_SUCCESS, PARSE_NEED_MORE_DATA, PARSE_ERROR };
 
 struct ParseResult {
   ParseStatus status;
-  size_t consumed_bytes;
+  size_t consumed_bytes {0};
 };
 
 struct HttpRequest {
   std::string_view method;
-  std::string_view uri;
-  std::string_view version;
+  std::string_view url;
+  std::string_view version {"HTTP/1.1"};
   absl::flat_hash_map<std::string_view, std::string_view> headers;
-  size_t content_length = 0;
-  std::string_view body;
+  butil::IOBuf body;
+  bool keep_alive {false};
+  bool complete {false};
 };
 
-ParseResult try_parse_http(std::string_view unparsed_data, HttpParseState& state, HttpRequest& req) {
-  size_t total_consumed = 0;
-  std::string_view view = unparsed_data;
-  while (state != PARSE_DONE) {
-    if (state == EXPECT_REQUIRE_LINE) {
-      size_t crlf_pos = view.find("\r\n");
-      if (crlf_pos == std::string_view::npos) {
-        return {PARSE_NEED_MORE_DATE, total_consumed};
+class HttpParser {
+ public:
+  HttpParser() {
+    llhttp_settings_init(&settings_);
+
+    settings_.on_url = [](llhttp_t* b, const char* at, size_t length) -> int {
+      auto* ctx = static_cast<ParserContext*>(b->data);
+      ctx->req->url = std::string_view(at, length);
+      return 0;
+    };
+
+    settings_.on_header_field = [](llhttp_t* b, const char* at, size_t length) -> int {
+      auto* ctx = static_cast<ParserContext*>(b->data);
+      if (!ctx->current_value.empty()) {
+        ctx->req->headers[ctx->current_field] = ctx->current_value;
+        ctx->current_field = {};
+        ctx->current_value = {};
       }
-      std::string_view line = view.substr(0, crlf_pos);
-      size_t space1 = line.find(' ');
-      size_t space2 = line.find(' ', space1 + 1);
-      if (space1 == std::string_view::npos || space2 == std::string_view::npos) {
+      ctx->current_field = std::string_view(at, length);
+      return 0;
+    };
+
+    settings_.on_header_value = [](llhttp_t* b, const char* at, size_t length) -> int {
+      auto* ctx = static_cast<ParserContext*>(b->data);
+      ctx->current_value = std::string_view(at, length);
+      return 0;
+    };
+
+    settings_.on_headers_complete = [](llhttp_t* b) -> int {
+      auto* ctx = static_cast<ParserContext*>(b->data);
+      if (!ctx->current_field.empty()) {
+        ctx->req->headers[ctx->current_field] = ctx->current_value;
+        ctx->current_field = {};
+        ctx->current_value = {};
+      }
+      return 0;
+    };
+
+    settings_.on_body = [](llhttp_t* b, const char* at, size_t length) -> int {
+      auto* ctx = static_cast<ParserContext*>(b->data);
+      ctx->req->body.append(at, length);
+      return 0;
+    };
+
+    settings_.on_message_complete = [](llhttp_t* b) -> int {
+      auto* ctx = static_cast<ParserContext*>(b->data);
+      ctx->req->complete = true;
+      return 0;
+    };
+
+    llhttp_init(&parser_, HTTP_REQUEST, &settings_);
+  }
+
+  void reset() { llhttp_reset(&parser_); }
+
+  // Iteratively parse backing physical blocks of butil::IOBuf (zero-copy)
+  ParseResult parse(const butil::IOBuf& buf, HttpRequest& req) {
+    reset();
+    req = HttpRequest {};
+    ParserContext ctx {&req, {}, {}};
+    parser_.data = &ctx;
+
+    size_t total_consumed = 0;
+    size_t block_count = buf.backing_block_num();
+
+    for (size_t i = 0; i < block_count; ++i) {
+      butil::StringPiece blk = buf.backing_block(i);
+      if (blk.empty()) continue;
+
+      enum llhttp_errno err = llhttp_execute(&parser_, blk.data(), blk.size());
+
+      if (err == HPE_OK) {
+        total_consumed += blk.size();
+      } else if (err == HPE_PAUSED || err == HPE_PAUSED_UPGRADE) {
+        const char* pos = llhttp_get_error_pos(&parser_);
+        if (pos >= blk.data() && pos <= blk.data() + blk.size()) {
+          total_consumed += (pos - blk.data());
+        } else {
+          total_consumed += blk.size();
+        }
+        llhttp_resume(&parser_);
+        break;
+      } else {
         return {PARSE_ERROR, 0};
       }
 
-      req.method = line.substr(0, space1);
-      req.uri = line.substr(space1 + 1, space2 - space1 - 1);
-      req.version = line.substr(space2 + 1);
-      size_t consumed = crlf_pos + 2;
-      view.remove_prefix(consumed);
-      total_consumed += consumed;
-      state = EXPECT_HEADERS;
-
-    } else if (state == EXPECT_HEADERS) {
-      size_t crlf_pos = view.find("\r\n");
-      if (crlf_pos == std::string_view::npos) {
-        return {PARSE_NEED_MORE_DATE, total_consumed};
+      if (req.complete) {
+        break;
       }
-      if (crlf_pos == 0) {
-        size_t consumed = 2;
-        view.remove_prefix(consumed);
-        total_consumed += consumed;
-
-        auto it = req.headers.find("Content-Length");
-        if (it != req.headers.end()) {
-          req.content_length = std::stoull(std::string(it->second));
-          state = EXPECT_BODY;
-        } else {
-          state = PARSE_DONE;
-        }
-        continue;
-      }
-
-      std::string_view line = view.substr(0, crlf_pos);
-      size_t colon_pos = line.find(':');
-      if (colon_pos != std::string_view::npos) {
-        std::string_view key = line.substr(0, colon_pos);
-        std::string_view value = line.substr(colon_pos + 1, crlf_pos - colon_pos - 1);
-        while (!value.empty() && value.front() == ' ') {
-          value.remove_prefix(1);
-        }
-        req.headers[key] = value;
-      }
-      size_t consumed = crlf_pos + 2;
-      view.remove_prefix(consumed);
-      total_consumed += consumed;
-    } else if (state == EXPECT_BODY) {
-      if (view.length() < req.content_length) {
-        return {PARSE_NEED_MORE_DATE, total_consumed};
-      }
-      req.body = view.substr(0, req.content_length);
-
-      size_t consumed = req.content_length;
-      view.remove_prefix(consumed);
-      total_consumed += consumed;
-      state = PARSE_DONE;
     }
+
+    if (req.complete) {
+      req.method = llhttp_method_name(static_cast<llhttp_method_t>(llhttp_get_method(&parser_)));
+      req.keep_alive = llhttp_should_keep_alive(&parser_);
+      return {PARSE_SUCCESS, total_consumed};
+    }
+
+    return {PARSE_NEED_MORE_DATA, total_consumed};
   }
 
-  return {PARSE_SUCCESS, total_consumed};
+ private:
+  struct ParserContext {
+    HttpRequest* req;
+    std::string_view current_field;
+    std::string_view current_value;
+  };
+
+  llhttp_t parser_;
+  llhttp_settings_t settings_;
+};
+
+inline ParseResult try_parse_http(HttpParser& parser, const butil::IOBuf& buf, HttpRequest& req) {
+  return parser.parse(buf, req);
 }
