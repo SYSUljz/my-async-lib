@@ -21,6 +21,8 @@
 #include "ant_server/awaiter/timeput_awaiter.hpp"
 #include "ant_server/handler/acceptor.hpp"
 #include "ant_server/http/parser.hpp"
+#include "ant_server/scheduler/executor.hpp"
+#include "ant_server/scheduler/timer_keeper.hpp"
 #include "ant_server/type.hpp"
 
 static constexpr int BUFFER_SIZE = 16000;
@@ -61,18 +63,37 @@ class Server {
       exit(EXIT_FAILURE);
     }
 
+    if (!ctx_.GetScheduler() && !g_scheduler) {
+      default_executor_ = std::make_unique<WorkStealingExecutor>(1);
+      default_executor_->Start();
+      default_timer_keeper_ = std::make_unique<TimerKeeper>(*default_executor_);
+      default_timer_keeper_->Start();
+    }
+
     acceptor_ = std::make_unique<Acceptor>(ctx_, server_socket, [this](int client_fd) {
-      [](Context& ctx, int fd) -> DetachedTask {
-        co_await with_timeout(ctx, std::chrono::seconds(5), [&]() { return handle_http_client(ctx, fd); });
-      }(ctx_, client_fd);
+      TimerKeeper& tk = default_timer_keeper_ ? *default_timer_keeper_
+                                              : (ctx_.GetScheduler() ? ctx_.GetScheduler()->GetTimerKeeper()
+                                                                     : ant_server::GetEffectiveTimerKeeper());
+
+      [](Context& ctx, TimerKeeper& timer_keeper, int fd) -> DetachedTask {
+        co_await with_timeout(timer_keeper, std::chrono::seconds(5), [&]() { return handle_http_client(ctx, fd); });
+      }(ctx_, tk, client_fd);
     });
     acceptor_->Start();
   }
+
   ~Server() {
     if (server_socket >= 0) {
       close(server_socket);
     }
+    if (default_timer_keeper_) {
+      default_timer_keeper_->Stop();
+    }
+    if (default_executor_) {
+      default_executor_->Stop();
+    }
   }
+
   Server(const Server&) = delete;
   Server& operator=(const Server&) = delete;
 
@@ -87,6 +108,8 @@ class Server {
   struct sockaddr_in address;
   Context& ctx_;
   std::unique_ptr<Acceptor> acceptor_;
+  std::unique_ptr<WorkStealingExecutor> default_executor_;
+  std::unique_ptr<TimerKeeper> default_timer_keeper_;
 };
 
 inline HttpTask handle_http_client(Context& ctx, int client_fd) {

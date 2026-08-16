@@ -8,13 +8,23 @@
 #include <utility>
 
 #include "ant_server/context/context.hpp"
+#include "ant_server/scheduler/timer_keeper.hpp"
 #include "ant_server/type.hpp"
-#include "ant_server/utils/timer.hpp"
+#include "ant_server/utils/sleep.hpp"
 
+// ============================================================================
+// TimeoutAwaiter: Coroutine Timeout & Cancellation Primitive
+// Uses dedicated TimerKeeper. Decoupled from IO Context.
+// ============================================================================
 template <typename CoroTaskFunc>
 struct TimeoutAwaiter {
-  TimeoutAwaiter(Context& ctx, std::chrono::milliseconds delay, CoroTaskFunc&& task_func)
-      : ctx_(ctx), delay_(delay), task_func_(std::forward<CoroTaskFunc>(task_func)) {}
+  TimeoutAwaiter(TimerKeeper& tk, std::chrono::milliseconds delay, CoroTaskFunc&& task_func)
+      : timer_keeper_(tk), delay_(delay), task_func_(std::forward<CoroTaskFunc>(task_func)) {}
+
+  TimeoutAwaiter(std::chrono::milliseconds delay, CoroTaskFunc&& task_func)
+      : timer_keeper_(ant_server::GetEffectiveTimerKeeper()),
+        delay_(delay),
+        task_func_(std::forward<CoroTaskFunc>(task_func)) {}
 
   bool await_ready() { return false; }
 
@@ -32,8 +42,7 @@ struct TimeoutAwaiter {
       return;
     }
 
-    auto& timer = ctx_.UseService<AntTimer>();
-    timer_id_ = timer.AddTimer(delay_, [source = source_]() {
+    timer_id_ = timer_keeper_.AddTimer(delay_, [source = source_]() {
       if (!source->stop_requested()) {
         source->request_stop();
       }
@@ -42,14 +51,14 @@ struct TimeoutAwaiter {
 
   void await_resume() {
     if (timer_id_ != 0) {
-      ctx_.UseService<AntTimer>().CancelTimer(timer_id_);
+      timer_keeper_.CancelTimer(timer_id_);
     }
   }
 
  private:
-  Context& ctx_;
+  TimerKeeper& timer_keeper_;
   std::chrono::milliseconds delay_;
-  std::size_t timer_id_ {0};
+  uint64_t timer_id_ {0};
   CoroTaskFunc task_func_;
   HttpTask child_task_;
   std::shared_ptr<std::stop_source> source_;
@@ -57,8 +66,22 @@ struct TimeoutAwaiter {
 };
 
 template <typename CoroTaskFunc>
-auto with_timeout(Context& ctx, std::chrono::milliseconds delay, CoroTaskFunc&& task_func) {
-  return TimeoutAwaiter<CoroTaskFunc> {ctx, delay, std::forward<CoroTaskFunc>(task_func)};
+inline auto with_timeout(TimerKeeper& tk, std::chrono::milliseconds delay, CoroTaskFunc&& task_func) {
+  return TimeoutAwaiter<CoroTaskFunc> {tk, delay, std::forward<CoroTaskFunc>(task_func)};
+}
+
+template <typename CoroTaskFunc>
+inline auto with_timeout(std::chrono::milliseconds delay, CoroTaskFunc&& task_func) {
+  return TimeoutAwaiter<CoroTaskFunc> {delay, std::forward<CoroTaskFunc>(task_func)};
+}
+
+template <typename CoroTaskFunc>
+inline auto with_timeout(Context& ctx, std::chrono::milliseconds delay, CoroTaskFunc&& task_func) {
+  if (ctx.GetScheduler()) {
+    return TimeoutAwaiter<CoroTaskFunc> {ctx.GetScheduler()->GetTimerKeeper(), delay,
+                                         std::forward<CoroTaskFunc>(task_func)};
+  }
+  return TimeoutAwaiter<CoroTaskFunc> {delay, std::forward<CoroTaskFunc>(task_func)};
 }
 
 #endif

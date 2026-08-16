@@ -32,24 +32,15 @@ struct Executor {
   virtual void schedule(TaskNode* task, std::size_t thread_id) { schedule(task); }
 };
 
+class Scheduler;
+class TimerKeeper;
+
 inline thread_local Executor* g_executor = nullptr;
 inline thread_local Scheduler* g_scheduler = nullptr;
 inline thread_local std::size_t g_thread_id {0};
 
 inline thread_local Context* g_local_context = nullptr;
 inline Context& GetCurrentContext() { return *g_local_context; }
-// Task used in AntTimer service
-struct Task {
-  std::size_t id;
-  std::chrono::steady_clock::time_point time;
-  bool canceled = false;
-  std::function<void()> callback;
-  bool operator>(const Task& other) { return time > other.time; }
-};
-
-struct TaskComparator {
-  bool operator()(const std::shared_ptr<Task>& lhs, const std::shared_ptr<Task>& rhs) const { return *lhs > *rhs; }
-};
 enum class CancelState { pending, canceled };
 struct DetachedTask {
   struct promise_type {
@@ -139,9 +130,10 @@ struct TypeErasedTask : public TaskNode {
 
   alignas(8) char sbo_buffer[SBO_SIZE];
   void (*destroy_fn)(TaskNode* self) noexcept {nullptr};
+  bool auto_delete {false};
 
   template <typename F>
-  explicit TypeErasedTask(F&& f) {
+  explicit TypeErasedTask(F&& f, bool auto_delete = false) : auto_delete(auto_delete) {
     using DecayedF = std::decay_t<F>;
     static_assert(sizeof(DecayedF) <= SBO_SIZE, "Closure too large for SBO!");
 
@@ -151,6 +143,9 @@ struct TypeErasedTask : public TaskNode {
       auto* node = static_cast<TypeErasedTask*>(self);
       auto* func = reinterpret_cast<DecayedF*>(node->sbo_buffer);
       (*func)();
+      if (node->auto_delete) {
+        delete node;
+      }
     };
 
     destroy_fn = [](TaskNode* self) noexcept {

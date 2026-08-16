@@ -75,22 +75,4 @@ struct IOuringSocketService : public BaseService {
   Context& ctx_;
 };
 
-struct IOuringTimeService : public BaseService {
-  explicit IOuringTimeService(Context& ctx, std::size_t period_ms = 1000) : ctx_(ctx), period_ms_(period_ms) {}
-
-  void StartTick(IOHandler* handler) {
-    io_uring_sqe* sqe = ctx_.GetSqe();
-    ts_.tv_sec = period_ms_ / 1000;
-    ts_.tv_nsec = (period_ms_ % 1000) * 1000000;
-    io_uring_prep_timeout(sqe, &ts_, 0, 0);
-    io_uring_sqe_set_data(sqe, handler);
-    ctx_.Submit();
-  }
-
- private:
-  __kernel_timespec ts_ {};
-  Context& ctx_;
-  std::size_t period_ms_;
-};
-
 #endif

@@ -1,36 +1,37 @@
 #pragma once
-#include <liburing.h>
 
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <typeindex>
+#include <typeinfo>
 
-#include <absl/container/flat_hash_map.h>
-
+#include "absl/container/flat_hash_map.h"
 #include "ant_server/type.hpp"
+#include "liburing.h"
 
+// Base class for services registered inside Context
 struct BaseService {
   virtual ~BaseService() = default;
 };
-struct Scheduler;
-struct Executor;
 
-struct Context {
-  explicit Context(std::size_t uring_size = 256, Scheduler* scheduler = nullptr, Executor* executor = nullptr)
-      : scheduler_(scheduler), executor_(executor) {
-    if (io_uring_queue_init(uring_size, &ring_, 0) < 0) {
-      throw std::runtime_error("Failed to initialize io_uring");
-    }
+// ============================================================================
+// Context: Dedicated Single-Threaded IO Reactor (io_uring Demultiplexer)
+// 100% Lock-Free: Exclusively owned and driven by a single IO thread.
+// ============================================================================
+class Context {
+ public:
+  explicit Context(std::size_t entries = 256, Scheduler* scheduler = nullptr, Executor* executor = nullptr)
+      : timeout_ms_(0), thread_id_(0), scheduler_(scheduler), executor_(executor) {
+    io_uring_queue_init(entries, &ring_, 0);
+  }
 
-    if (io_uring_register_files_sparse(&ring_, uring_size) < 0) {
-      io_uring_queue_exit(&ring_);
-      throw std::runtime_error("Failed to register sparse files table");
-    }
-  };
   ~Context() { io_uring_queue_exit(&ring_); }
 
-  inline io_uring_sqe* GetSqe() { return io_uring_get_sqe(&ring_); }
-  inline void Submit() { io_uring_submit(&ring_); }
+  // Lock-free single-threaded SQE submission
+  inline io_uring_sqe* GetSqe() noexcept { return io_uring_get_sqe(&ring_); }
+  inline void Submit() noexcept { io_uring_submit(&ring_); }
 
   inline void Wakeup() {
     io_uring_sqe* sqe = GetSqe();
@@ -41,21 +42,24 @@ struct Context {
     }
   }
 
-  void SetExecutor(Executor* executor) { executor_ = executor; }
-  Executor* GetExecutor() const { return executor_; }
+  void SetExecutor(Executor* executor) noexcept { executor_ = executor; }
+  Executor* GetExecutor() const noexcept { return executor_; }
 
+  void SetScheduler(Scheduler* scheduler) noexcept { scheduler_ = scheduler; }
+  Scheduler* GetScheduler() const noexcept { return scheduler_; }
+
+  // Lock-free single-threaded service container for IO reactor
   template <typename ServiceType>
   ServiceType& UseService() {
     std::type_index id(typeid(ServiceType));
     auto it = services_.find(id);
     if (it != services_.end()) {
       return static_cast<ServiceType&>(*it->second);
-    } else {
-      auto new_service = std::make_unique<ServiceType>(*this);
-      auto& ref = *new_service;
-      services_[id] = std::move(new_service);
-      return ref;
     }
+    auto new_service = std::make_unique<ServiceType>(*this);
+    auto& ref = *new_service;
+    services_[id] = std::move(new_service);
+    return ref;
   }
 
   inline int ProcessEvents(int wait_nr = 1) {

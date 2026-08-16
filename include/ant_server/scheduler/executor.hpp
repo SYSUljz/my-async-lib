@@ -166,9 +166,12 @@ class WorkStealingExecutor : public Executor {
     }
   }
 
+  void SetScheduler(Scheduler* scheduler) noexcept { scheduler_ = scheduler; }
+
   void WorkerLoop(int thread_id) {
     g_thread_id = static_cast<std::size_t>(thread_id);
     g_executor = this;
+    g_scheduler = scheduler_;
     g_local_context = nullptr;  // Worker threads do NOT own io_uring context
 
     auto& w = *workers_[thread_id];
@@ -319,4 +322,5 @@ class WorkStealingExecutor : public Executor {
   IntrusiveSpinLockQueue global_queue_;
   std::atomic<bool> running_ {false};
   std::size_t nthreads_;
+  Scheduler* scheduler_ {nullptr};
 };

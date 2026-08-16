@@ -9,11 +9,13 @@
 #include "ant_server/constants.hpp"
 #include "ant_server/context/context.hpp"
 #include "ant_server/scheduler/executor.hpp"
+#include "ant_server/scheduler/timer_keeper.hpp"
 #include "ant_server/type.hpp"
 
 // ============================================================================
-// Scheduler: Orchestrates Dedicated IO Reactors (io_uring) & Worker Executor
-// Clean separation of concerns (Mode A: Strict Reactor + Worker Separation).
+// Scheduler: Orchestrates Dedicated IO Reactors (io_uring), Worker Executor,
+// and Background TimerKeeper (Intrusive Timing Wheel).
+// Strict Mode A: 100% Separation of Concerns.
 // ============================================================================
 class Scheduler : public Executor {
  public:
@@ -21,12 +23,15 @@ class Scheduler : public Executor {
             std::size_t uring_size = ant_server::constants::kDefaultServerUringSize)
       : n_workers_(n_workers), n_io_threads_(n_io_threads), uring_size_(uring_size) {
     worker_executor_ = std::make_unique<WorkStealingExecutor>(n_workers_);
+    timer_keeper_ = std::make_unique<TimerKeeper>(*worker_executor_);
 
     io_contexts_.reserve(n_io_threads_);
     for (std::size_t i = 0; i < n_io_threads_; ++i) {
       auto ctx = std::make_unique<Context>(uring_size_, this, worker_executor_.get());
       io_contexts_.push_back(std::move(ctx));
     }
+
+    worker_executor_->SetScheduler(this);
   }
 
   // Smart default constructor matching machine topology
@@ -44,6 +49,7 @@ class Scheduler : public Executor {
   // Accessors
   Executor& GetExecutor() noexcept { return *worker_executor_; }
   WorkStealingExecutor& GetWorkerExecutor() noexcept { return *worker_executor_; }
+  TimerKeeper& GetTimerKeeper() noexcept { return *timer_keeper_; }
 
   Context& GetIOContext(std::size_t index) {
     if (index >= io_contexts_.size()) {
@@ -80,16 +86,19 @@ class Scheduler : public Executor {
   void Start() {
     running_.store(true, std::memory_order_release);
 
-    // 1. Start pure worker threads
+    // 1. Start dedicated background timing wheel keeper
+    timer_keeper_->Start();
+
+    // 2. Start pure worker threads
     worker_executor_->Start();
 
-    // 2. Start dedicated IO reactor threads
+    // 3. Start dedicated IO reactor threads
     io_threads_.reserve(n_io_threads_);
     for (std::size_t i = 0; i < n_io_threads_; ++i) {
       io_threads_.emplace_back([this, i]() { this->IOLoop(static_cast<int>(i)); });
     }
 
-    // 3. Join all IO threads on exit
+    // 4. Join all IO threads on exit
     for (auto& t : io_threads_) {
       if (t.joinable()) {
         t.join();
@@ -103,6 +112,9 @@ class Scheduler : public Executor {
       for (auto& ctx : io_contexts_) {
         ctx->Stop();
       }
+
+      // Stop background timing wheel keeper
+      timer_keeper_->Stop();
 
       // Stop worker executor
       worker_executor_->Stop();
@@ -119,6 +131,7 @@ class Scheduler : public Executor {
 
  private:
   std::unique_ptr<WorkStealingExecutor> worker_executor_;
+  std::unique_ptr<TimerKeeper> timer_keeper_;
   std::vector<std::unique_ptr<Context>> io_contexts_;
   std::vector<std::thread> io_threads_;
   std::atomic<bool> running_ {false};

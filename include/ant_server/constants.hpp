@@ -33,8 +33,10 @@ inline constexpr std::size_t kNumProvidedBuffers = 1024;
 inline constexpr std::size_t kProvidedBufferSize = 4096;
 inline constexpr uint16_t kProvidedBufferGroupId = 1;
 
-// Time Service constants
-inline constexpr std::size_t kDefaultTimerPeriodMs = 1000;
+// Timing Wheel & TimerKeeper constants
+inline constexpr std::size_t kDefaultTimingWheelSlots = 4096;
+inline constexpr std::size_t kDefaultTimingWheelSlotMask = kDefaultTimingWheelSlots - 1;
+inline constexpr int64_t kDefaultTimingWheelTickMs = 10;
 
 // TypeErasedTask constants
 inline constexpr std::size_t kTaskSboSize = 48;
