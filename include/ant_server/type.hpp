@@ -24,6 +24,15 @@ struct IOHandler {
 
 struct Context;
 struct Scheduler;
+struct TaskNode;
+
+struct Executor {
+  virtual ~Executor() = default;
+  virtual void schedule(TaskNode* task) = 0;
+  virtual void schedule(TaskNode* task, std::size_t thread_id) { schedule(task); }
+};
+
+inline thread_local Executor* g_executor = nullptr;
 inline thread_local Scheduler* g_scheduler = nullptr;
 inline thread_local std::size_t g_thread_id {0};
 
@@ -108,6 +117,7 @@ struct CoroTask : public TaskNode {
 
   void init(std::coroutine_handle<> h) noexcept { handle = h; }
 };
+
 template <typename F>
 struct LambdaTask : public TaskNode {
   F func;

@@ -36,7 +36,9 @@ struct BaseAwaiter : public IOHandler, public CoroTask {
   void on_complete() override {
     if (handle) {
       this->init(handle);
-      if (g_scheduler) {
+      if (g_executor) {
+        g_executor->schedule(this);
+      } else if (g_scheduler) {
         g_scheduler->schedule(this, g_thread_id);
       } else {
         handle.resume();

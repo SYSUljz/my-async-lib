@@ -75,6 +75,15 @@ class SPMCQueue {
     return nullptr;
   }
 
+  int64_t Size() const noexcept {
+    int64_t b = bottom_.load(std::memory_order_relaxed);
+    int64_t t = top_.load(std::memory_order_relaxed);
+    int64_t sz = b - t;
+    return sz > 0 ? sz : 0;
+  }
+
+  bool Empty() const noexcept { return Size() == 0; }
+
   // 4. Owner Thread TakeHalf operation (Extract half of local tasks to offload to global queue)
   std::size_t TakeHalf(std::array<T, kMaxSize>& out_batch) {
     int64_t b = bottom_.load(std::memory_order_relaxed);

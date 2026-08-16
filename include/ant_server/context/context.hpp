@@ -9,11 +9,15 @@
 
 #include "ant_server/type.hpp"
 
-struct BaseService;
+struct BaseService {
+  virtual ~BaseService() = default;
+};
 struct Scheduler;
+struct Executor;
 
 struct Context {
-  explicit Context(std::size_t uring_size = 256, Scheduler* scheduler = nullptr) : scheduler_(scheduler) {
+  explicit Context(std::size_t uring_size = 256, Scheduler* scheduler = nullptr, Executor* executor = nullptr)
+      : scheduler_(scheduler), executor_(executor) {
     if (io_uring_queue_init(uring_size, &ring_, 0) < 0) {
       throw std::runtime_error("Failed to initialize io_uring");
     }
@@ -27,6 +31,18 @@ struct Context {
 
   inline io_uring_sqe* GetSqe() { return io_uring_get_sqe(&ring_); }
   inline void Submit() { io_uring_submit(&ring_); }
+
+  inline void Wakeup() {
+    io_uring_sqe* sqe = GetSqe();
+    if (sqe) {
+      io_uring_prep_nop(sqe);
+      io_uring_sqe_set_data(sqe, nullptr);
+      Submit();
+    }
+  }
+
+  void SetExecutor(Executor* executor) { executor_ = executor; }
+  Executor* GetExecutor() const { return executor_; }
 
   template <typename ServiceType>
   ServiceType& UseService() {
@@ -74,7 +90,10 @@ struct Context {
     }
   }
 
-  void Stop() { running_ = false; }
+  void Stop() {
+    running_ = false;
+    Wakeup();
+  }
 
  private:
   struct io_uring ring_;
@@ -83,4 +102,5 @@ struct Context {
   bool running_ {false};
   absl::flat_hash_map<std::type_index, std::unique_ptr<BaseService>> services_;
   Scheduler* scheduler_ {nullptr};
+  Executor* executor_ {nullptr};
 };

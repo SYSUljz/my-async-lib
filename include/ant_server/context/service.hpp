@@ -11,11 +11,6 @@
 #include "ant_server/context/context.hpp"
 #include "ant_server/type.hpp"
 
-class BaseService {
- public:
-  virtual ~BaseService() = default;
-};
-
 struct IOuringSocketService : public BaseService {
   explicit IOuringSocketService(Context& ctx) : ctx_(ctx) {}
 

@@ -53,7 +53,7 @@ target_link_libraries(test_timeout PRIVATE ant_server ${URING_LIBRARIES} absl::s
 # --- GoogleTest Configuration ---
 enable_testing()
 
-add_executable(unit_tests test/test_read_awaiter_cancel.cpp test/test_iobuf.cpp)
+add_executable(unit_tests test/test_read_awaiter_cancel.cpp test/test_iobuf.cpp test/test_executor.cpp test/test_resume_on.cpp)
 target_link_libraries(unit_tests PRIVATE ant_server ${URING_LIBRARIES} absl::synchronization absl::base gtest_main)
 
 include(GoogleTest)

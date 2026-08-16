@@ -1,150 +1,129 @@
 #pragma once
 
-#include <array>
 #include <atomic>
+#include <cstddef>
 #include <memory>
 #include <thread>
 #include <vector>
 
+#include "ant_server/constants.hpp"
 #include "ant_server/context/context.hpp"
-#include "ant_server/scheduler/mpmc_queue.hpp"
-#include "ant_server/scheduler/spmc_queue.hpp"
+#include "ant_server/scheduler/executor.hpp"
 #include "ant_server/type.hpp"
 
-class Scheduler {
+// ============================================================================
+// Scheduler: Orchestrates Dedicated IO Reactors (io_uring) & Worker Executor
+// Clean separation of concerns (Mode A: Strict Reactor + Worker Separation).
+// ============================================================================
+class Scheduler : public Executor {
  public:
-  struct WorkerState {
-    int thread_id;
-    SPMCQueue<TaskNode*> queue;
-    std::unique_ptr<Context> ctx;
-    TaskNode* lifo_slot {nullptr};
-    uint64_t tick {0};
-  };
+  Scheduler(std::size_t n_workers, std::size_t n_io_threads = 2,
+            std::size_t uring_size = ant_server::constants::kDefaultServerUringSize)
+      : n_workers_(n_workers), n_io_threads_(n_io_threads), uring_size_(uring_size) {
+    worker_executor_ = std::make_unique<WorkStealingExecutor>(n_workers_);
 
-  explicit Scheduler(std::size_t nthreads = std::thread::hardware_concurrency()) : nthreads_(nthreads) {
-    workers_.reserve(nthreads_);
-    for (size_t i = 0; i < nthreads_; ++i) {
-      auto w = std::make_unique<WorkerState>();
-      w->thread_id = static_cast<int>(i);
-      w->ctx = std::make_unique<Context>(256, this);
-      workers_.push_back(std::move(w));
+    io_contexts_.reserve(n_io_threads_);
+    for (std::size_t i = 0; i < n_io_threads_; ++i) {
+      auto ctx = std::make_unique<Context>(uring_size_, this, worker_executor_.get());
+      io_contexts_.push_back(std::move(ctx));
     }
   }
 
-  void schedule(TaskNode* task, std::size_t thread_id) {
-    if (thread_id >= workers_.size()) {
-      push_global(task);
-      return;
-    }
-    auto& w = *workers_[thread_id];
-    if (!w.lifo_slot) {
-      w.lifo_slot = task;
-    } else {
-      if (!w.queue.Push(task)) {
-        // Local queue is full (256): batch offload half of local queue to global queue
-        std::array<TaskNode*, 256> batch {};
-        std::size_t count = w.queue.TakeHalf(batch);
-        if (count > 0) {
-          for (std::size_t i = 0; i < count - 1; ++i) {
-            batch[i]->next = batch[i + 1];
-          }
-          batch[count - 1]->next = task;
-          task->next = nullptr;
-          global_queue_.PushBatch(batch[0], task);
-        } else {
-          global_queue_.Push(task);
-        }
-      }
-    }
-  }
+  // Smart default constructor matching machine topology
+  Scheduler()
+      : Scheduler(std::thread::hardware_concurrency() > 2 ? std::thread::hardware_concurrency() - 2 : 1,
+                  std::thread::hardware_concurrency() > 2 ? 2 : 1) {}
 
+  ~Scheduler() override { Stop(); }
+
+  // Executor interface delegation
+  void schedule(TaskNode* task) override { worker_executor_->schedule(task); }
+  void schedule(TaskNode* task, std::size_t thread_id) override { worker_executor_->schedule(task, thread_id); }
   void schedule(TaskNode* task, int thread_id) { schedule(task, static_cast<std::size_t>(thread_id)); }
 
-  void WorkerLoop(int thread_id) {
-    g_thread_id = thread_id;
-    g_scheduler = this;
-    if (thread_id < static_cast<int>(workers_.size())) {
-      g_local_context = workers_[thread_id]->ctx.get();
-    }
+  // Accessors
+  Executor& GetExecutor() noexcept { return *worker_executor_; }
+  WorkStealingExecutor& GetWorkerExecutor() noexcept { return *worker_executor_; }
 
-    auto& w = *workers_[thread_id];
+  Context& GetIOContext(std::size_t index) {
+    if (index >= io_contexts_.size()) {
+      return *io_contexts_[0];
+    }
+    return *io_contexts_[index];
+  }
+
+  Context& GetNextIOContext() {
+    std::size_t idx = next_io_idx_.fetch_add(1, std::memory_order_relaxed) % io_contexts_.size();
+    return *io_contexts_[idx];
+  }
+
+  std::size_t NumWorkers() const noexcept { return n_workers_; }
+  std::size_t NumIOThreads() const noexcept { return n_io_threads_; }
+
+  void IOLoop(int io_id) {
+    g_thread_id = static_cast<std::size_t>(io_id);
+    g_local_context = io_contexts_[io_id].get();
+    g_executor = worker_executor_.get();
+    g_scheduler = this;
+
+    auto& ctx = *io_contexts_[io_id];
 
     while (running_.load(std::memory_order_relaxed)) {
-      w.tick++;
-
-      // Non-blocking check for I/O events on current context
-      w.ctx->ProcessEvents(0);
-
-      TaskNode* task = nullptr;
-
-      // 1. Every 61 ticks, check global queue to prevent starvation
-      if (w.tick % 61 == 0) {
-        task = pop_global();
-      }
-
-      // 2. Check LIFO slot
-      if (!task && w.lifo_slot) {
-        task = w.lifo_slot;
-        w.lifo_slot = nullptr;
-      }
-
-      // 3. Pop from local Chase-Lev queue (LIFO)
-      if (!task) {
-        task = w.queue.TryPop();
-      }
-
-      // 4. Steal from other workers (FIFO)
-      if (!task) {
-        task = steal_task(thread_id);
-      }
-
-      // 5. Check global queue again
-      if (!task) {
-        task = pop_global();
-      }
-
-      // 6. Execute task or block for CQE events
-      if (task) {
-        task->run();
-      } else {
-        w.ctx->ProcessEvents(1);
+      int ret = ctx.ProcessEvents(1);
+      if (ret < 0) {
+        if (ret == -EINTR) continue;
+        break;
       }
     }
   }
 
   void Start() {
-    running_.store(true);
-    std::vector<std::thread> threads;
-    threads.reserve(nthreads_);
-    for (std::size_t i = 0; i < nthreads_; i++) {
-      threads.emplace_back([this, i]() { this->WorkerLoop(static_cast<int>(i)); });
+    running_.store(true, std::memory_order_release);
+
+    // 1. Start pure worker threads
+    worker_executor_->Start();
+
+    // 2. Start dedicated IO reactor threads
+    io_threads_.reserve(n_io_threads_);
+    for (std::size_t i = 0; i < n_io_threads_; ++i) {
+      io_threads_.emplace_back([this, i]() { this->IOLoop(static_cast<int>(i)); });
     }
-    for (auto& t : threads) {
+
+    // 3. Join all IO threads on exit
+    for (auto& t : io_threads_) {
       if (t.joinable()) {
         t.join();
       }
     }
   }
 
-  void Stop() { running_.store(false); }
-
- private:
-  void push_global(TaskNode* task) { global_queue_.Push(task); }
-
-  TaskNode* pop_global() { return global_queue_.Pop(); }
-
-  TaskNode* steal_task(int thief_id) {
-    for (std::size_t i = 0; i < nthreads_; ++i) {
-      if (static_cast<int>(i) == thief_id) continue;
-      if (auto* task = workers_[i]->queue.Steal()) {
-        return task;
+  void Stop() {
+    if (running_.exchange(false, std::memory_order_acq_rel)) {
+      // Stop all IO contexts (wake them up from io_uring_submit_and_wait)
+      for (auto& ctx : io_contexts_) {
+        ctx->Stop();
       }
+
+      // Stop worker executor
+      worker_executor_->Stop();
+
+      // Join IO threads
+      for (auto& t : io_threads_) {
+        if (t.joinable()) {
+          t.join();
+        }
+      }
+      io_threads_.clear();
     }
-    return nullptr;
   }
 
-  std::vector<std::unique_ptr<WorkerState>> workers_;
-  alignas(kCacheLineSize) std::atomic<bool> running_ {false};
-  IntrusiveSpinLockQueue global_queue_;
-  std::size_t nthreads_;
+ private:
+  std::unique_ptr<WorkStealingExecutor> worker_executor_;
+  std::vector<std::unique_ptr<Context>> io_contexts_;
+  std::vector<std::thread> io_threads_;
+  std::atomic<bool> running_ {false};
+  std::atomic<std::size_t> next_io_idx_ {0};
+  std::size_t n_workers_;
+  std::size_t n_io_threads_;
+  std::size_t uring_size_;
 };
