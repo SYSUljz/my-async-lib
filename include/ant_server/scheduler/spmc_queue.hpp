@@ -89,10 +89,14 @@ class SPMCQueue {
     int64_t b = bottom_.load(std::memory_order_relaxed);
     int64_t t = top_.load(std::memory_order_acquire);
     int64_t size = b - t;
-    if (size <= 0) return 0;
+    if (size <= 0) {
+      return 0;
+    }
 
     int64_t num_to_take = size / 2;
-    if (num_to_take == 0) num_to_take = 1;
+    if (num_to_take == 0) {
+      num_to_take = 1;
+    }
 
     if (top_.compare_exchange_strong(t, t + num_to_take, std::memory_order_seq_cst, std::memory_order_relaxed)) {
       for (int64_t i = 0; i < num_to_take; ++i) {

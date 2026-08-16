@@ -42,7 +42,9 @@ class WorkStealingExecutor : public Executor {
 
     // Multi-producer push into worker's private inbox (lock-free Treiber stack)
     void push_inbox(TaskNode* task) {
-      if (!task) return;
+      if (!task) {
+        return;
+      }
       TaskNode* old_head = inbox.load(std::memory_order_relaxed);
       do {
         task->next = old_head;
@@ -51,15 +53,21 @@ class WorkStealingExecutor : public Executor {
 
     // Single-consumer bulk pop from inbox (1 atomic exchange takes all)
     TaskNode* pop_all_inbox() {
-      if (!inbox.load(std::memory_order_relaxed)) return nullptr;
+      if (!inbox.load(std::memory_order_relaxed)) {
+        return nullptr;
+      }
       return inbox.exchange(nullptr, std::memory_order_acquire);
     }
 
     // Estimate current worker load (local queue + LIFO slot + inbox)
     size_t approximate_load() const {
       size_t sz = static_cast<size_t>(queue.Size());
-      if (lifo_slot) sz += 1;
-      if (inbox.load(std::memory_order_relaxed)) sz += 2;
+      if (lifo_slot) {
+        sz += 1;
+      }
+      if (inbox.load(std::memory_order_relaxed)) {
+        sz += 2;
+      }
       return sz;
     }
 
@@ -73,7 +81,9 @@ class WorkStealingExecutor : public Executor {
 
     void park_and_wait(const std::atomic<bool>& running) {
       absl::MutexLock lock(&park_mu);
-      if (!running.load(std::memory_order_relaxed)) return;
+      if (!running.load(std::memory_order_relaxed)) {
+        return;
+      }
       is_parked.store(true, std::memory_order_relaxed);
       while (running.load(std::memory_order_relaxed) && is_parked.load(std::memory_order_relaxed) &&
              inbox.load(std::memory_order_relaxed) == nullptr) {
@@ -99,7 +109,9 @@ class WorkStealingExecutor : public Executor {
 
   // General task schedule (P2C load-balanced dispatch from external / IO / DB threads)
   void schedule(TaskNode* task) override {
-    if (!task) return;
+    if (!task) {
+      return;
+    }
 
     // 1. If called from inside a worker thread, prioritize its own local slot/queue
     if (g_executor == this && g_thread_id < workers_.size()) {
@@ -127,7 +139,9 @@ class WorkStealingExecutor : public Executor {
 
   // Targeted schedule with worker thread_id hint
   void schedule(TaskNode* task, std::size_t thread_id) override {
-    if (!task) return;
+    if (!task) {
+      return;
+    }
 
     if (thread_id >= workers_.size()) {
       global_queue_.Push(task);
@@ -277,12 +291,16 @@ class WorkStealingExecutor : public Executor {
 
  private:
   TaskNode* steal_task(int thief_id) {
-    if (nthreads_ <= 1) return nullptr;
+    if (nthreads_ <= 1) {
+      return nullptr;
+    }
 
     std::size_t start = ant_server::fast_random() % nthreads_;
     for (std::size_t i = 0; i < nthreads_; ++i) {
       std::size_t victim_id = (start + i) % nthreads_;
-      if (static_cast<int>(victim_id) == thief_id) continue;
+      if (static_cast<int>(victim_id) == thief_id) {
+        continue;
+      }
 
       auto& victim = *workers_[victim_id];
 

@@ -72,7 +72,9 @@ class TimerKeeper {
 
   // Zero-allocation registration for CoroTask / TaskNode
   uint64_t AddTimer(std::chrono::milliseconds delay, TaskNode* task_node) {
-    if (!task_node) return 0;
+    if (!task_node) {
+      return 0;
+    }
     return add_internal(delay, task_node, /*owns_task_node=*/false);
   }
 
@@ -85,7 +87,9 @@ class TimerKeeper {
   }
 
   void CancelTimer(uint64_t id) {
-    if (id == 0) return;
+    if (id == 0) {
+      return;
+    }
     absl::MutexLock lock(&mu_);
     auto it = task_map_.find(id);
     if (it != task_map_.end()) {
@@ -124,7 +128,9 @@ class TimerKeeper {
 
       {
         absl::MutexLock lock(&mu_);
-        if (!running_.load(std::memory_order_relaxed)) break;
+        if (!running_.load(std::memory_order_relaxed)) {
+          break;
+        }
 
         auto now = std::chrono::steady_clock::now();
         auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();

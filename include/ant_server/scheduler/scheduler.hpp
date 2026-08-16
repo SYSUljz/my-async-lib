@@ -19,8 +19,8 @@
 // ============================================================================
 class Scheduler : public Executor {
  public:
-  Scheduler(std::size_t n_workers, std::size_t n_io_threads = 2,
-            std::size_t uring_size = ant_server::constants::kDefaultServerUringSize)
+  explicit Scheduler(std::size_t n_workers, std::size_t n_io_threads = 2,
+                     std::size_t uring_size = ant_server::constants::kDefaultServerUringSize)
       : n_workers_(n_workers), n_io_threads_(n_io_threads), uring_size_(uring_size) {
     worker_executor_ = std::make_unique<WorkStealingExecutor>(n_workers_);
     timer_keeper_ = std::make_unique<TimerKeeper>(*worker_executor_);
@@ -77,7 +77,9 @@ class Scheduler : public Executor {
     while (running_.load(std::memory_order_relaxed)) {
       int ret = ctx.ProcessEvents(1);
       if (ret < 0) {
-        if (ret == -EINTR) continue;
+        if (ret == -EINTR) {
+          continue;
+        }
         break;
       }
     }

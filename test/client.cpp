@@ -23,7 +23,7 @@ int main() {
   }
 
   std::cout << "connecting to 127.0.0.1:8012 ..." << std::endl;
-  if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
+  if (connect(client_socket, reinterpret_cast<struct sockaddr*>(&server_address), sizeof(server_address)) < 0) {
     std::cerr << "Failed connect" << std::endl;
     return -1;
   }

@@ -25,40 +25,40 @@
 #include "ant_server/scheduler/timer_keeper.hpp"
 #include "ant_server/type.hpp"
 
-static constexpr int BUFFER_SIZE = 16000;
+static constexpr int kBufferSize = 16000;
 
 HttpTask handle_http_client(Context& ctx, int client_fd);
 
 class Server {
  public:
-  static constexpr int URING_SIZE = 256;
+  static constexpr int kUringSize = 256;
 
   Server(Context& ctx, int domain, int port, int service, int protocol, int backlog, u_long interface)
       : ctx_(ctx),
-        domain(domain),
-        port(port),
-        service(service),
-        protocol(protocol),
-        backlog(backlog),
-        interface(interface) {
-    address.sin_family = domain;
-    address.sin_port = htons(port);
-    address.sin_addr.s_addr = htonl(interface);
+        domain_(domain),
+        port_(port),
+        service_(service),
+        protocol_(protocol),
+        backlog_(backlog),
+        interface_(interface) {
+    address_.sin_family = domain_;
+    address_.sin_port = htons(port_);
+    address_.sin_addr.s_addr = htonl(interface_);
 
-    server_socket = socket(domain, service, protocol);
-    if (server_socket < 0) {
+    server_socket_ = socket(domain_, service_, protocol_);
+    if (server_socket_ < 0) {
       perror("Failed to initialize/connect to socket...");
       exit(EXIT_FAILURE);
     }
     int opt = 1;
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(server_socket_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    if (bind(server_socket, (struct sockaddr*)&address, sizeof(address)) < 0) {
+    if (bind(server_socket_, reinterpret_cast<struct sockaddr*>(&address_), sizeof(address_)) < 0) {
       perror("Failed to bind socket...");
       exit(EXIT_FAILURE);
     }
 
-    if (listen(server_socket, backlog) < 0) {
+    if (listen(server_socket_, backlog_) < 0) {
       perror("Failed to start listening...");
       exit(EXIT_FAILURE);
     }
@@ -70,7 +70,7 @@ class Server {
       default_timer_keeper_->Start();
     }
 
-    acceptor_ = std::make_unique<Acceptor>(ctx_, server_socket, [this](int client_fd) {
+    acceptor_ = std::make_unique<Acceptor>(ctx_, server_socket_, [this](int client_fd) {
       TimerKeeper& tk = default_timer_keeper_ ? *default_timer_keeper_
                                               : (ctx_.GetScheduler() ? ctx_.GetScheduler()->GetTimerKeeper()
                                                                      : ant_server::GetEffectiveTimerKeeper());
@@ -83,8 +83,8 @@ class Server {
   }
 
   ~Server() {
-    if (server_socket >= 0) {
-      close(server_socket);
+    if (server_socket_ >= 0) {
+      close(server_socket_);
     }
     if (default_timer_keeper_) {
       default_timer_keeper_->Stop();
@@ -98,14 +98,14 @@ class Server {
   Server& operator=(const Server&) = delete;
 
  private:
-  int domain;
-  int port;
-  int service;
-  int protocol;
-  int backlog;
-  u_long interface;
-  int server_socket;
-  struct sockaddr_in address;
+  int domain_;
+  int port_;
+  int service_;
+  int protocol_;
+  int backlog_;
+  u_long interface_;
+  int server_socket_;
+  struct sockaddr_in address_;
   Context& ctx_;
   std::unique_ptr<Acceptor> acceptor_;
   std::unique_ptr<WorkStealingExecutor> default_executor_;

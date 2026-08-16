@@ -4,8 +4,7 @@
 #include <cstdint>
 #include <new>
 
-namespace ant_server {
-namespace constants {
+namespace ant_server::constants {
 
 // Cache line alignment for hardware interference
 #if defined(__cpp_lib_hardware_interference_size)
@@ -45,8 +44,7 @@ inline constexpr std::size_t kTaskSboSize = 48;
 inline constexpr std::size_t kDefaultHttpBufferSize = 16000;
 inline constexpr int kDefaultServerUringSize = 256;
 
-}  // namespace constants
-}  // namespace ant_server
+}  // namespace ant_server::constants
 
 // Global backward compatibility alias for kCacheLineSize
 using ant_server::constants::kCacheLineSize;

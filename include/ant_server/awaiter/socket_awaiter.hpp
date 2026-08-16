@@ -24,7 +24,9 @@ struct BaseAwaiter : public IOHandler, public CoroTask {
   std::optional<std::stop_callback<std::function<void()>>> cb_;
 
   void bind_stop_callback() {
-    if (!token_.stop_possible()) return;
+    if (!token_.stop_possible()) {
+      return;
+    }
     cb_.emplace(token_, [this] {
       CancelState expected = CancelState::pending;
       if (state_.compare_exchange_strong(expected, CancelState::canceled, std::memory_order_acq_rel)) {
@@ -47,11 +49,9 @@ struct BaseAwaiter : public IOHandler, public CoroTask {
   }
 };
 
-namespace butil {
-namespace iobuf {
+namespace butil::iobuf {
 IOBuf::Block* acquire_tls_block();
-}
-}  // namespace butil
+}  // namespace butil::iobuf
 
 // Unified high-performance ReadAwaiter (supports raw buffer reads & zero-copy butil::IOBuf reads)
 struct ReadAwaiter : public BaseAwaiter {
@@ -142,7 +142,7 @@ struct WriteAwaiter : public BaseAwaiter {
 
 // Specialized write awaiter for butil::IOBuf (supports zero-copy io_uring_prep_writev scatter/gather writes)
 struct IOBufWriteAwaiter : public BaseAwaiter {
-  static constexpr size_t MAX_IOV_COUNT = 64;
+  static constexpr size_t kMaxIovCount = 64;
 
   IOBufWriteAwaiter(Context& ctx, int client_fd, const butil::IOBuf& source_iobuf, bool is_fixed = true)
       : BaseAwaiter(ctx), fd_(client_fd), source_iobuf_(source_iobuf), is_fixed_(is_fixed) {
@@ -176,7 +176,7 @@ struct IOBufWriteAwaiter : public BaseAwaiter {
 
  private:
   void init_iov() {
-    iov_count_ = std::min(source_iobuf_.backing_block_num(), MAX_IOV_COUNT);
+    iov_count_ = std::min(source_iobuf_.backing_block_num(), kMaxIovCount);
     total_len_ = 0;
     if (iov_count_ > 0) {
       iovs_ = std::make_unique<struct iovec[]>(iov_count_);
@@ -200,7 +200,7 @@ struct IOBufWriteAwaiter : public BaseAwaiter {
 struct CloseAwaiter : public BaseAwaiter {
   CloseAwaiter(Context& ctx, int client_fd, bool is_fixed = true)
       : BaseAwaiter(ctx), fd_(client_fd), is_fixed_(is_fixed) {}
-  CloseAwaiter(int client_fd, bool is_fixed = true, Context& ctx = GetCurrentContext())
+  explicit CloseAwaiter(int client_fd, bool is_fixed = true, Context& ctx = GetCurrentContext())
       : BaseAwaiter(ctx), fd_(client_fd), is_fixed_(is_fixed) {}
   bool await_ready() { return false; }
   void await_suspend(std::coroutine_handle<> handle) {

@@ -126,16 +126,16 @@ auto make_lambda_task(F&& f) {
   return LambdaTask<std::decay_t<F>> {std::forward<F>(f)};
 }
 struct TypeErasedTask : public TaskNode {
-  static constexpr size_t SBO_SIZE = ant_server::constants::kTaskSboSize;
+  static constexpr size_t kSboSize = ant_server::constants::kTaskSboSize;
 
-  alignas(8) char sbo_buffer[SBO_SIZE];
+  alignas(8) char sbo_buffer[kSboSize];
   void (*destroy_fn)(TaskNode* self) noexcept {nullptr};
   bool auto_delete {false};
 
   template <typename F>
   explicit TypeErasedTask(F&& f, bool auto_delete = false) : auto_delete(auto_delete) {
     using DecayedF = std::decay_t<F>;
-    static_assert(sizeof(DecayedF) <= SBO_SIZE, "Closure too large for SBO!");
+    static_assert(sizeof(DecayedF) <= kSboSize, "Closure too large for SBO!");
 
     new (sbo_buffer) DecayedF(std::forward<F>(f));
 
@@ -156,7 +156,9 @@ struct TypeErasedTask : public TaskNode {
   }
 
   ~TypeErasedTask() {
-    if (destroy_fn) destroy_fn(this);
+    if (destroy_fn) {
+      destroy_fn(this);
+    }
   }
 };
 

@@ -15,7 +15,9 @@ class IntrusiveSpinLockQueue {
 
   // Single item push (FIFO)
   void Push(TaskNode* node) {
-    if (!node) return;
+    if (!node) {
+      return;
+    }
     node->next = nullptr;
 
     absl::base_internal::SpinLockHolder holder(&lock_);
@@ -30,7 +32,9 @@ class IntrusiveSpinLockQueue {
 
   // Batch push: connects batch_head -> ... -> batch_tail into queue tail in O(1)
   void PushBatch(TaskNode* batch_head, TaskNode* batch_tail) {
-    if (!batch_head || !batch_tail) return;
+    if (!batch_head || !batch_tail) {
+      return;
+    }
     batch_tail->next = nullptr;
 
     absl::base_internal::SpinLockHolder holder(&lock_);

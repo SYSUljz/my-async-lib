@@ -91,7 +91,9 @@ class HttpParser {
 
     for (size_t i = 0; i < block_count; ++i) {
       butil::StringPiece blk = buf.backing_block(i);
-      if (blk.empty()) continue;
+      if (blk.empty()) {
+        continue;
+      }
 
       enum llhttp_errno err = llhttp_execute(&parser_, blk.data(), blk.size());
 

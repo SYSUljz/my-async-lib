@@ -11,8 +11,12 @@ namespace ant_server {
 
 // Helper to resolve an active TimerKeeper from explicit pointer or global scheduler
 inline TimerKeeper& GetEffectiveTimerKeeper(TimerKeeper* explicit_tk = nullptr) {
-  if (explicit_tk) return *explicit_tk;
-  if (g_scheduler) return g_scheduler->GetTimerKeeper();
+  if (explicit_tk) {
+    return *explicit_tk;
+  }
+  if (g_scheduler) {
+    return g_scheduler->GetTimerKeeper();
+  }
   throw std::runtime_error("sleep_for requires an active TimerKeeper or running Scheduler");
 }
 

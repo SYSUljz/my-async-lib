@@ -23,7 +23,7 @@ struct BaseService {
 class Context {
  public:
   explicit Context(std::size_t entries = 256, Scheduler* scheduler = nullptr, Executor* executor = nullptr)
-      : timeout_ms_(0), thread_id_(0), scheduler_(scheduler), executor_(executor) {
+      : scheduler_(scheduler), executor_(executor) {
     io_uring_queue_init(entries, &ring_, 0);
   }
 
@@ -88,7 +88,9 @@ class Context {
     while (running_) {
       int ret = ProcessEvents(1);
       if (ret < 0) {
-        if (ret == -EINTR) continue;
+        if (ret == -EINTR) {
+          continue;
+        }
         break;
       }
     }
